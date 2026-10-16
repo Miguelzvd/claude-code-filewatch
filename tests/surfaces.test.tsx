@@ -77,6 +77,8 @@ function world(on: any, w: World, ran: Ran) {
     if (!hit) throw new Error(`ENOENT ${e.path}`)
     return { value: { kind: hit, size: 1, mtimeMs: name === 'a.ts' ? 1_800_000_000_500 : 1_700_000_000_000, isLink: false } }
   })
+  const touched = new Set<string>()
+  const waiting = new Map<string, () => void>()
   on('process.run', async (_$: any, e: any) => {
     const argv: string[] = [...e.argv]
     ran.push(argv)
@@ -91,6 +93,16 @@ function world(on: any, w: World, ran: Ran) {
       return ok(w.du?.[argv.at(-1) ?? ''] ?? '')
     }
     if (argv[0] === 'uname') return ok(w.os === 'darwin' ? 'Darwin\n' : 'Linux\n')
+    if (argv[0] === 'touch') {
+      touched.add(argv[1] ?? '')
+      waiting.get(argv[1] ?? '')?.()
+    }
+    if (argv[0] === 'rm') for (const f of argv.slice(2)) touched.delete(f)
+    if (argv[0] === 'sh' && argv[2]?.includes('while [ ! -e')) {
+      const mark = argv[4] ?? ''
+      if (!touched.has(mark)) await new Promise<void>(res => waiting.set(mark, res))
+      return ok('')
+    }
     if (argv[0] === 'sh') return ok('missing\n')
     if (argv[0] === 'git') {
       const verb = argv.slice(4).find(a => !a.startsWith('-'))
@@ -1423,5 +1435,73 @@ test('files a Grep or Glob search returns shimmer as reads, relative names resol
   await $.tool.call({ tool: 'Glob', pattern: '*.ts' } as any)
   await clock.settle()
   expect(await texts(ui)).toContain(shimmer('a.ts', 'purple'))
+  await ui.unmount()
+})
+
+const diffLine = (mark: string, text: string) => `"${mark}","${text}"`
+
+test('review: an Edit waits in the pane with its diff, accept lets it run and cancel refuses it', { timeoutMs: 20_000, options: { review: 'on' } }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const calls: string[] = []
+  const clock = world(on, {
+    os: 'linux', env: { HOME: '/home/k', TMPDIR: '/tmp' }, cwd: root, top: '', status: '', numstat: '',
+    dirs: { [root]: [['a.ts', 'file']] },
+    files: { [`${root}/a.ts`]: 'one\ntwo\nthree\n' },
+    tool: (e: any) => {
+      calls.push(e.tool)
+      return undefined
+    },
+  }, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filewatch', surface: 'terminal', component: 'Pane', requestId: 'filewatch', props: paneProps(60) })
+  const edit = (to: string) => $.tool.call({ tool: 'Edit', file_path: `${root}/a.ts`, old_string: 'two', new_string: to } as any).then(v => v, err => err)
+
+  const accepted = edit('TWO')
+  await clock.settle()
+  let shown = await texts(ui)
+  expect(shown).toContain('review')
+  expect(shown).toContain(diffLine('- ', 'two'))
+  expect(shown).toContain(diffLine('+ ', 'TWO'))
+  expect(calls).not.toContain('Edit')
+  await ui.press({ key: 'review-accept' })
+  await clock.settle()
+  await accepted
+  expect(calls).toContain('Edit')
+  expect(await texts(ui)).not.toContain('review')
+
+  calls.length = 0
+  const refused = edit('2')
+  await clock.settle()
+  expect(await texts(ui)).toContain(diffLine('+ ', '2'))
+  await ui.press({ key: 'review-cancel' })
+  await clock.settle()
+  expect(JSON.stringify(await refused)).toContain('refused this edit')
+  expect(calls).not.toContain('Edit')
+  expect(await texts(ui)).not.toContain('review')
+  await ui.unmount()
+})
+
+test('review off: an Edit runs at once and the pane draws no review', { timeoutMs: 20_000 }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const calls: string[] = []
+  const clock = world(on, {
+    os: 'linux', env: { HOME: '/home/k', TMPDIR: '/tmp' }, cwd: root, top: '', status: '', numstat: '',
+    dirs: { [root]: [['a.ts', 'file']] },
+    files: { [`${root}/a.ts`]: 'one\ntwo\n' },
+    tool: (e: any) => {
+      calls.push(e.tool)
+      return undefined
+    },
+  }, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filewatch', surface: 'terminal', component: 'Pane', requestId: 'filewatch', props: paneProps(60) })
+  await $.tool.call({ tool: 'Edit', file_path: `${root}/a.ts`, old_string: 'two', new_string: 'TWO' } as any)
+  await clock.settle()
+  expect(calls).toContain('Edit')
+  expect(await texts(ui)).not.toContain('review')
   await ui.unmount()
 })

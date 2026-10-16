@@ -9,6 +9,7 @@ const MAX_HUNKS = 5
 export function buildEditDiff(content: string, oldString: string, newString: string, replaceAll = false): EditDiff | null {
   if (!oldString) return null
   const file = content.split('\n')
+  if (file.length > 1 && file[file.length - 1] === '') file.pop()
   const hunks: DiffLine[][] = []
   let added = 0
   let removed = 0

@@ -1,5 +1,6 @@
 import { type BuiltinToolResults, type EngineInterface, type Register, type Timer, update } from 'claude-code'
 import { LINUX_LAUNCH, openCommand, openWithCommand, tmuxOpenCommand } from './open'
+import { buildEditDiff, type DiffLine } from './diff'
 import type { ButtonProps } from './button'
 
 import type { Activity, FileNode, FileTree, Theme } from '../types'
@@ -121,6 +122,20 @@ const sizing = new Set<string>()
 const listLatest = new Map<string, number>()
 const unreadable = new Set<string>()
 const background = new Map<string, Background>()
+
+type Review = { file: string; lines: DiffLine[]; added: number; removed: number; choice: '' | 'accept' | 'cancel'; mark: string }
+const REVIEW_ROWS = 12
+const REVIEW_WAIT_MS = 600_000
+// An Edit held for the person: the pane draws it, the hook waits on a marker file the buttons touch.
+let review: Review | null = null
+let reviewEdits = false
+
+async function decideReview($: EngineInterface, choice: 'accept' | 'cancel'): Promise<void> {
+  const r = review
+  if (!r || r.choice) return
+  r.choice = choice
+  await $.process.run(['touch', r.mark], { timeoutMs: 3_000 }).catch(() => undefined)
+}
 
 function osName($: EngineInterface): Promise<'linux' | 'darwin' | 'win32'> {
   platform ??= (async () => {
@@ -1117,6 +1132,7 @@ export const register: Register = (on, options) => {
   openWithSetting = typeof options?.open === 'string' ? options.open : ''
   editWithSetting = typeof options?.edit === 'string' ? options.edit.trim() : ''
   noDock = options?.start === 'off'
+  reviewEdits = options?.review === 'on'
   on('session.start', async ($, e, next) => {
     await $.command.register({ name: 'filewatch', description: 'Show the file tree; args: [path] (no path = cwd)' })
     const windows = (await $.env.get('OS')) === 'Windows_NT'
@@ -1169,6 +1185,36 @@ export const register: Register = (on, options) => {
     await reset($, root, true)
     return { text: `File tree on ${shortPath(root)}${follow ? ' (follows the cwd)' : ''}.` }
   })
+
+  on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
+    if (!reviewEdits || (await osName($)) === 'win32') return next(e)
+    if (review) return { deny: 'Another edit is waiting for review in filewatch; try this one again after it.' }
+    let content: string
+    try {
+      content = String(await $.fs.read(e.file_path))
+    } catch {
+      return next(e)
+    }
+    const diff = buildEditDiff(content, e.old_string, e.new_string, e.replace_all === true)
+    if (!diff) return next(e)
+    const mark = `${((await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '')}/filewatch-review-${await $.session.id()}-${++markId}.mark`
+    await $.process.run(['rm', '-f', mark], { timeoutMs: 3_000 }).catch(() => undefined)
+    const mine: Review = { file: e.file_path, lines: diff.lines, added: diff.added, removed: diff.removed, choice: '', mark }
+    review = mine
+    const t = await get($)
+    if (t.preview) await patch($, () => ({ preview: '', previewTop: 0 }))
+    if (!noDock && t.root) await $.ui.open({ id: PANE, title: `Files: ${t.root.split('/').pop() || t.root}` }).catch(() => undefined)
+    $.ui.invalidate('ui.render')
+    try {
+      await $.process.run(['sh', '-c', 'while [ ! -e "$1" ]; do sleep 0.2; done', 'sh', mark], { timeoutMs: REVIEW_WAIT_MS }).catch(() => undefined)
+    } finally {
+      if (review === mine) review = null
+      $.ui.invalidate('ui.render')
+      void $.process.run(['rm', '-f', mark], { timeoutMs: 3_000 }).catch(() => undefined)
+    }
+    if (mine.choice === 'accept') return next(e)
+    return { deny: mine.choice === 'cancel' ? 'The user refused this edit in filewatch; nothing was changed.' : 'The edit review in filewatch timed out; nothing was changed.' }
+  }).catch(($, e, next) => (next.called ? next(e) : { deny: 'The edit review in filewatch failed; nothing was changed.' }))
 
   on('tool.call', async ($, e, next) => {
     const shell = e.tool === 'Bash' || e.tool === 'PowerShell'
@@ -1436,7 +1482,11 @@ export const register: Register = (on, options) => {
     const untracked = new Set(t.untrackedDirs)
     const width = Math.max(24, e.props.bodyColumns)
     const rows = visibleRows(t)
-    const fixed = 3 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0)
+    const rv = review
+    const rvLines = rv ? (rv.lines.length > REVIEW_ROWS ? rv.lines.slice(0, REVIEW_ROWS - 1) : rv.lines) : []
+    const rvMore = rv ? rv.lines.length - rvLines.length : 0
+    const rvHeight = rv ? rvLines.length + (rvMore ? 1 : 0) + 2 : 0
+    const fixed = 3 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0) + rvHeight
     const room = nativeScroll ? Math.max(1, rows.length) : Math.max(5, (e.props.scroll?.bodyRows ?? 40) - fixed)
     const isLit = (id: string) => bright.has(id) || dimmed.has(id)
     const focus = followClaude && t.flashOn ? ([...t.flash].reverse().find(id => id !== BRANCH_ROW) ?? t.cursor) : t.cursor
@@ -1644,6 +1694,29 @@ export const register: Register = (on, options) => {
           module="./rows.tsx"
           props={{ rows: specs, active: t.cursor, ...rowColors, pointer, ...(bar ? { bar } : {}) } satisfies RowsProps}
         />
+        {rv ? (
+          <Box flexDirection="column">
+            <Text bold color={theme.accent} wrap="truncate-start">
+              review {shortPath(rv.file)} +{rv.added} -{rv.removed}
+            </Text>
+            {rvLines.map((l, i) => (
+              <Text
+                key={`rv-${i}`}
+                color={l.kind === 'add' ? addColor : l.kind === 'del' ? delColor : light ? theme.muted : undefined}
+                dimColor={!light && (l.kind === 'ctx' || l.kind === 'gap')}
+                wrap="truncate-end"
+              >
+                {l.kind === 'add' ? '+ ' : l.kind === 'del' ? '- ' : '  '}
+                {l.kind === 'gap' ? '⋯ ' + l.text : l.text}
+              </Text>
+            ))}
+            {rvMore ? <Text dimColor={!light} color={light ? theme.muted : undefined}>  ⋯ {rvMore} more lines</Text> : null}
+            <Box flexDirection="row" gap={2}>
+              <Button key="review-accept" plain hotkey="a" label="a accept" onPress={() => void decideReview($, 'accept')} />
+              <Button key="review-cancel" plain dimColor hotkey="c" label="c cancel" onPress={() => void decideReview($, 'cancel')} />
+            </Box>
+          </Box>
+        ) : null}
         <Box flexGrow={1} />
         {(t.selected || latest) && (
           <Box flexDirection="row">
