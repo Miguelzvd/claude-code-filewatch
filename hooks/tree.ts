@@ -290,7 +290,60 @@ export function relative(root: string, path: string): string {
   return path === root ? '' : path.slice(root.endsWith('/') ? root.length : root.length + 1)
 }
 
+// t.edited is oldest first. Files under one root share a group; a file elsewhere starts its own
+// (or widens a group when it sits above it). Groups run newest first, so the latest edit leads.
+export function editedRows(t: FileTree): Row[] {
+  const q = t.query.trim().toLowerCase()
+  const known = new Map(t.nodes.map(n => [n.id, n]))
+  const groups: { root: string; files: string[]; last: number }[] = []
+  t.edited.forEach((file, at) => {
+    if (q && !file.toLowerCase().includes(q)) return
+    const root = inside(t.root, file) ? t.root : dirname(file)
+    const home = groups.find(g => inside(g.root, file) || (root !== t.root && inside(root, g.root) && g.root !== t.root))
+    if (home) {
+      if (!inside(home.root, file)) home.root = root
+      home.files.push(file)
+      home.last = at
+    } else groups.push({ root, files: [file], last: at })
+  })
+  groups.sort((a, b) => b.last - a.last)
+  const rows: Row[] = []
+  const lone = groups.length === 1 && groups[0]?.root === t.root
+  for (const g of groups) {
+    const kids = new Map<string, FileNode[]>()
+    const seen = new Set<string>()
+    const add = (id: string, kind: FileNode['kind']) => {
+      if (seen.has(id)) return
+      seen.add(id)
+      const name = id.slice(id.lastIndexOf('/') + 1)
+      const node = known.get(id) ?? { id, parent: dirname(id), name, kind, hidden: false, mtime: 0, size: 0, loaded: true }
+      const list = kids.get(node.parent)
+      if (list) list.push(node)
+      else kids.set(node.parent, [node])
+    }
+    for (const f of g.files) {
+      add(f, 'file')
+      for (const a of ancestorsOf(f, g.root)) add(a, 'dir')
+    }
+    for (const list of kids.values()) list.sort((a, b) => (a.kind === 'dir' ? 0 : 1) - (b.kind === 'dir' ? 0 : 1) || collator.compare(a.name, b.name))
+    const walk = (dir: string, depth: number) => {
+      for (const n of kids.get(dir) ?? []) {
+        const isDir = kids.has(n.id)
+        rows.push({ node: isDir ? { ...n, kind: 'dir' } : n, depth, open: isDir })
+        if (isDir) walk(n.id, depth + 1)
+      }
+    }
+    if (lone) walk(g.root, 0)
+    else {
+      rows.push({ node: { id: g.root, parent: dirname(g.root), name: g.root === t.root ? g.root.slice(g.root.lastIndexOf('/') + 1) || g.root : g.root, kind: 'dir', hidden: false, mtime: 0, size: 0, loaded: true }, depth: 0, open: true })
+      walk(g.root, 1)
+    }
+  }
+  return rows
+}
+
 export function visibleRows(t: FileTree): Row[] {
+  if (t.onlyEdited) return editedRows(t)
   const kids = new Map<string, FileNode[]>()
   for (const n of t.nodes) {
     if (!t.showHidden && n.hidden) continue

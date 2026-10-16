@@ -747,6 +747,7 @@ async function afterBash($: EngineInterface, jobs: Job[]): Promise<void> {
     })
     const present = new Set((await get($)).nodes.map(n => n.id))
     const touchTone = actions.find(a => !['commit', 'push', 'add'].includes(a.verb))?.tone ?? 'orange'
+    if (touchTone === 'orange') await markEdited($, hits.filter(id => present.has(id)))
     if (showWrites) for (const id of hits) if (present.has(id)) tones[id] = touchTone
   }
   if (showReads) {
@@ -796,8 +797,14 @@ function scheduleScan($: EngineInterface, job: Job): void {
   })
 }
 
+// Edits are recorded before any cwd reset or root check, so none of the session's are lost.
+async function markEdited($: EngineInterface, paths: string[]): Promise<void> {
+  if (paths.length) await patch($, cur => ({ edited: [...cur.edited.filter(p => !paths.includes(p)), ...new Set(paths)].slice(-EDITED_LIMIT) }))
+}
+
 async function touched($: EngineInterface, paths: string[], tone: string, show: boolean): Promise<void> {
   if (tone !== 'purple' && previewed && paths.map(posix).includes(previewed.path)) previewed = null
+  if (tone === 'orange') await markEdited($, paths.map(posix))
   if (await followCwd($)) return
   const t = await get($)
   if (!t.root) return
@@ -810,7 +817,6 @@ async function touched($: EngineInterface, paths: string[], tone: string, show: 
     await loadDirs($, [...new Set(within.map(dirname))].filter(d => inside(t.root, d)))
     await refreshGit($)
   } else await revealPaths($, within)
-  if (tone === 'orange') await patch($, cur => ({ edited: [...new Set([...cur.edited, ...within])].slice(-EDITED_LIMIT) }))
   if (!show) return
   const tones: Record<string, string> = {}
   for (const p of within) tones[p] = tone
@@ -1033,6 +1039,10 @@ async function quickLook($: EngineInterface, path: string): Promise<void> {
 }
 
 async function toggle($: EngineInterface, n: FileNode): Promise<void> {
+  if ((await get($)).onlyEdited && n.kind === 'dir') {
+    await patch($, () => ({ cursor: n.id }))
+    return
+  }
   if (n.kind === 'dir' && !(await get($)).expanded.includes(n.id)) await loadDirs($, [n.id])
   await patch($, t => {
     const open = new Set(t.expanded)
