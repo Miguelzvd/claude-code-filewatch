@@ -1494,7 +1494,8 @@ export const register: Register = (on, options) => {
     const rvLines = rv ? (rv.lines.length > REVIEW_ROWS ? rv.lines.slice(0, REVIEW_ROWS - 1) : rv.lines) : []
     const rvMore = rv ? rv.lines.length - rvLines.length : 0
     const rvHeight = rv ? rvLines.length + (rvMore ? 1 : 0) + 2 : 0
-    const fixed = 3 + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0) + rvHeight
+    const legendRows = e.props.bodyColumns < (unicode ? 58 : 66) ? 2 : 1
+    const fixed = 2 + legendRows + (t.top ? (t.branch ? 1 : 0) : showHints ? 1 : 0) + (t.selected || latest ? 1 : 0) + rvHeight
     const room = nativeScroll ? Math.max(1, rows.length) : Math.max(5, (e.props.scroll?.bodyRows ?? 40) - fixed)
     const isLit = (id: string) => bright.has(id) || dimmed.has(id)
     const focus = followClaude && t.flashOn ? ([...t.flash].reverse().find(id => id !== BRANCH_ROW) ?? t.cursor) : t.cursor
@@ -1690,7 +1691,7 @@ export const register: Register = (on, options) => {
           </Box>
           {t.query ? <Button key="clear" plain dimColor label={unicode ? '×' : '\u{f0156}'} onPress={() => void search($, '')} /> : null}
         </Box>
-        <Box flexDirection="row" gap={2}>
+        <Box flexDirection="row" flexWrap="wrap" columnGap={2}>
           {([['j', '↓', '\u{f0045}'], ['k', '↑', '\u{f005d}'], ['h', '←', '\u{f004d}'], ['l', '→', '\u{f0054}']] as const).map(([k, plain, nerd]) => (
             <Button key={`nav-${k}`} plain dimColor hotkey={k} label={unicode ? plain : nerd} onPress={() => void navigate($, k).then(park)} />
           ))}
