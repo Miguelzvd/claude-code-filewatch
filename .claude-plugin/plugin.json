@@ -6,7 +6,7 @@
   "author": {
     "name": "Miguel (fork of Kurt Buhler)"
   },
-  "repository": "https://github.com/Miguelzvd/filewatch",
+  "repository": "https://github.com/Miguelzvd/claude-code-filewatch",
   "keywords": [
     "file-tree",
     "git",

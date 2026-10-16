@@ -25,14 +25,14 @@
 The repo is its own plugin marketplace. Run this in the terminal:
 
 ```bash
-claude plugin marketplace add Miguelzvd/filewatch
+claude plugin marketplace add Miguelzvd/claude-code-filewatch
 claude plugin install filewatch@filewatch
 ```
 
 Or inside a Claude Code session:
 
 ```text
-/plugin marketplace add Miguelzvd/filewatch
+/plugin marketplace add Miguelzvd/claude-code-filewatch
 /plugin install filewatch@filewatch
 ```
 
