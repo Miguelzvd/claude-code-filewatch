@@ -107,6 +107,7 @@ let view = { from: 0, max: 0 }
 let nativeScroll = false
 let lastSync = 0
 let noDock = false
+let paneOpen = false
 let home = ''
 let platform: Promise<'linux' | 'darwin' | 'win32'> | null = null
 let dirty: { root: string; files: Record<string, Change> } = { root: '', files: {} }
@@ -1165,6 +1166,7 @@ export const register: Register = (on, options) => {
       const cwd = await cwdOf($)
       if (!t.root || t.nodes.length === 0 || (follow && t.root !== cwd)) await reset($, cwd)
       else if (!noDock) await $.ui.open({ id: PANE, title: `Files: ${t.root.split('/').pop() || t.root}` })
+      paneOpen = !noDock
     })()
     return next(e)
   })
@@ -1181,8 +1183,15 @@ export const register: Register = (on, options) => {
     const terminal = await $.session.surfaces().then(s => s.includes('terminal'), () => true)
     if (terminal && !e.presentation.isFullscreen) return { text: 'filewatch shows in the sidebar, which needs the fullscreen layout. Run /tui fullscreen, then /filewatch.' }
     if (terminal && e.presentation.columns < 110) return { text: 'filewatch shows in the sidebar, which needs a terminal at least 110 columns wide. Widen it, then run /filewatch.' }
-    noDock = false
     const arg = (e.args ?? '').trim()
+    if (!arg && !noDock && paneOpen) {
+      noDock = true
+      paneOpen = false
+      await $.ui.close({ id: PANE }).catch(() => undefined)
+      return { text: 'filewatch closed. Run /filewatch to open it again.' }
+    }
+    noDock = false
+    paneOpen = true
     const cwd = await cwdOf($)
     follow = !arg
     const root = arg ? resolve(cwd, arg, home) : cwd
