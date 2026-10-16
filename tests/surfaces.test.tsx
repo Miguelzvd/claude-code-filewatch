@@ -77,8 +77,14 @@ function world(on: any, w: World, ran: Ran) {
     if (!hit) throw new Error(`ENOENT ${e.path}`)
     return { value: { kind: hit, size: 1, mtimeMs: name === 'a.ts' ? 1_800_000_000_500 : 1_700_000_000_000, isLink: false } }
   })
+  const slash = (p: string) => p.replace(/\\/g, '/').replace(/^.*?(?=[A-Za-z]:\/)/, '')
   const touched = new Set<string>()
   const waiting = new Map<string, () => void>()
+  on('fs.write', (_$: any, e: any) => {
+    touched.add(slash(e.path))
+    waiting.get(slash(e.path))?.()
+    return { value: undefined }
+  })
   on('process.run', async (_$: any, e: any) => {
     const argv: string[] = [...e.argv]
     ran.push(argv)
@@ -93,13 +99,17 @@ function world(on: any, w: World, ran: Ran) {
       return ok(w.du?.[argv.at(-1) ?? ''] ?? '')
     }
     if (argv[0] === 'uname') return ok(w.os === 'darwin' ? 'Darwin\n' : 'Linux\n')
-    if (argv[0] === 'touch') {
-      touched.add(argv[1] ?? '')
-      waiting.get(argv[1] ?? '')?.()
+    if (argv[0] === 'rm') for (const f of argv.slice(2)) touched.delete(slash(f))
+    const winMark = e.init?.env?.FILEWATCH_MARK ? slash(String(e.init.env.FILEWATCH_MARK)) : undefined
+    if (argv[0] === 'powershell' && winMark) {
+      if (argv[4]?.startsWith('Remove-Item')) touched.delete(winMark)
+      else {
+        if (!touched.has(winMark)) await new Promise<void>(res => waiting.set(winMark, res))
+      }
+      return ok('')
     }
-    if (argv[0] === 'rm') for (const f of argv.slice(2)) touched.delete(f)
     if (argv[0] === 'sh' && argv[2]?.includes('while [ ! -e')) {
-      const mark = argv[4] ?? ''
+      const mark = slash(argv[4] ?? '')
       if (!touched.has(mark)) await new Promise<void>(res => waiting.set(mark, res))
       return ok('')
     }
@@ -1503,5 +1513,72 @@ test('review off: an Edit runs at once and the pane draws no review', { timeoutM
   await clock.settle()
   expect(calls).toContain('Edit')
   expect(await texts(ui)).not.toContain('review')
+  await ui.unmount()
+})
+
+test('review on Windows: an Edit waits in the pane, accept lets it run and cancel refuses it', { timeoutMs: 20_000, options: { review: 'on' } }, async ($, on) => {
+  const ran: Ran = []
+  const root = 'C:/Users/k/proj'
+  const calls: string[] = []
+  const clock = world(on, {
+    os: 'win32', env: { OS: 'Windows_NT', USERPROFILE: 'C:\\Users\\k', TEMP: 'C:\\Users\\k\\AppData\\Local\\Temp' }, cwd: 'C:\\Users\\k\\proj', top: '', status: '', numstat: '',
+    dirs: { [root]: [['a.ts', 'file']] },
+    files: { '/Users/k/proj/a.ts': 'one\r\ntwo\r\nthree' },
+    tool: (e: any) => {
+      calls.push(e.tool)
+      return undefined
+    },
+  }, ran)
+  await $.session.start({ cwd: 'C:\\Users\\k\\proj', surface: 'desktop', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filewatch', surface: 'desktop', component: 'Pane', requestId: 'filewatch', props: paneProps(60) })
+  const edit = (to: string) => $.tool.call({ tool: 'Edit', file_path: `${root}/a.ts`, old_string: 'two', new_string: to } as any).then(v => v, err => err)
+
+  const accepted = edit('TWO')
+  await clock.settle()
+  expect(await texts(ui)).toContain(diffLine('+ ', 'TWO'))
+  expect(calls).not.toContain('Edit')
+  await ui.press({ key: 'review-accept' })
+  await clock.settle()
+  await accepted
+  expect(calls).toContain('Edit')
+  expect(ran.some(a => a[0] === 'powershell')).toBe(true)
+  expect(ran.some(a => a[0] === 'sh')).toBe(false)
+
+  calls.length = 0
+  const refused = edit('2')
+  await clock.settle()
+  await ui.press({ key: 'review-cancel' })
+  await clock.settle()
+  expect(JSON.stringify(await refused)).toContain('refused this edit')
+  expect(calls).not.toContain('Edit')
+  await ui.unmount()
+})
+
+test('e toggles the tree between only the files Claude edited and everything', { timeoutMs: 20_000 }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const clock = world(on, {
+    os: 'linux', env: { HOME: '/home/k' }, cwd: root, top: '', status: '', numstat: '',
+    dirs: { [root]: [['a.ts', 'file'], ['b.ts', 'file'], ['src', 'dir']], [`${root}/src`]: [['c.ts', 'file']] },
+  }, ran)
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filewatch', surface: 'terminal', component: 'Pane', requestId: 'filewatch', props: paneProps(60) })
+  await $.tool.call({ tool: 'Write', file_path: `${root}/src/c.ts`, content: 'x' } as any)
+  await clock.settle()
+  expect(await texts(ui)).toContain('b.ts')
+  await ui.press({ key: 'nav-e' })
+  await clock.settle()
+  let shown = await texts(ui)
+  expect(shown).toContain('c.ts')
+  expect(shown).toContain('src')
+  expect(shown).not.toContain('b.ts')
+  expect(shown).not.toContain('a.ts')
+  await ui.post({ key: 'e' }, { in: 'rows' })
+  await clock.settle()
+  shown = await texts(ui)
+  expect(shown).toContain('a.ts')
+  expect(shown).toContain('b.ts')
   await ui.unmount()
 })

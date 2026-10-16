@@ -50,6 +50,8 @@ export function emptyTree(root: string): FileTree {
     scroll: null,
     preview: '',
     previewTop: 0,
+    edited: [],
+    onlyEdited: false,
   }
 }
 
@@ -297,11 +299,13 @@ export function visibleRows(t: FileTree): Row[] {
     else kids.set(n.parent, [n])
   }
   const q = t.query.trim().toLowerCase()
+  const only = t.onlyEdited ? new Set(t.edited) : null
   let keep: Set<string> | null = null
-  if (q) {
+  if (q || only) {
     keep = new Set()
     for (const n of t.nodes) {
-      if (!relative(t.root, n.id).toLowerCase().includes(q)) continue
+      if (q && !relative(t.root, n.id).toLowerCase().includes(q)) continue
+      if (only && !only.has(n.id)) continue
       keep.add(n.id)
       for (const a of ancestorsOf(n.id, t.root)) keep.add(a)
     }

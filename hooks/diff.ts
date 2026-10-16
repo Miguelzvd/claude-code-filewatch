@@ -2,6 +2,7 @@ export type DiffLine = { kind: 'ctx' | 'add' | 'del' | 'gap'; text: string; line
 export type EditDiff = { lines: DiffLine[]; added: number; removed: number; matches: number }
 
 const CONTEXT = 2
+const bare = (text: string): string => text.replace(/\r$/, '')
 const MAX_HUNKS = 5
 
 // The diff an Edit would make, built before it runs: the file is still untouched, so git cannot show it.
@@ -37,10 +38,10 @@ export function buildEditDiff(content: string, oldString: string, newString: str
     const top = first + head
     const bottom = top + del.length
     const lines: DiffLine[] = []
-    for (let i = Math.max(0, top - CONTEXT); i < top; i++) lines.push({ kind: 'ctx', text: file[i] ?? '', line: i + 1 })
-    del.forEach((text, i) => lines.push({ kind: 'del', text, line: top + i + 1 }))
-    for (const text of add) lines.push({ kind: 'add', text })
-    for (let i = bottom; i < Math.min(file.length, bottom + CONTEXT); i++) lines.push({ kind: 'ctx', text: file[i] ?? '', line: i + 1 })
+    for (let i = Math.max(0, top - CONTEXT); i < top; i++) lines.push({ kind: 'ctx', text: bare(file[i] ?? ''), line: i + 1 })
+    del.forEach((text, i) => lines.push({ kind: 'del', text: bare(text), line: top + i + 1 }))
+    for (const text of add) lines.push({ kind: 'add', text: bare(text) })
+    for (let i = bottom; i < Math.min(file.length, bottom + CONTEXT); i++) lines.push({ kind: 'ctx', text: bare(file[i] ?? ''), line: i + 1 })
     removed += del.length
     added += add.length
     hunks.push(lines)

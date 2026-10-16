@@ -71,7 +71,7 @@
     "review": {
       "type": "string",
       "title": "Review edits",
-      "description": "on: when Claude calls Edit, the pane shows the diff and holds the edit until you accept (a) or cancel (c) it. off: edits run as before. Linux and macOS only.",
+      "description": "on: when Claude calls Edit, the pane shows the diff and holds the edit until you accept (a) or cancel (c) it. off: edits run as before.",
       "default": "off",
       "options": [
         "off",

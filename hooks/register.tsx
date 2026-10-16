@@ -1,6 +1,7 @@
 import { type BuiltinToolResults, type EngineInterface, type Register, type Timer, update } from 'claude-code'
 import { LINUX_LAUNCH, openCommand, openWithCommand, tmuxOpenCommand } from './open'
 import { buildEditDiff, type DiffLine } from './diff'
+import { reviewMark, reviewRemove, reviewWait } from './review'
 import type { ButtonProps } from './button'
 
 import type { Activity, FileNode, FileTree, Theme } from '../types'
@@ -124,6 +125,7 @@ const unreadable = new Set<string>()
 const background = new Map<string, Background>()
 
 type Review = { file: string; lines: DiffLine[]; added: number; removed: number; choice: '' | 'accept' | 'cancel'; mark: string }
+const EDITED_LIMIT = 500
 const REVIEW_ROWS = 12
 const REVIEW_WAIT_MS = 600_000
 // An Edit held for the person: the pane draws it, the hook waits on a marker file the buttons touch.
@@ -134,7 +136,7 @@ async function decideReview($: EngineInterface, choice: 'accept' | 'cancel'): Pr
   const r = review
   if (!r || r.choice) return
   r.choice = choice
-  await $.process.run(['touch', r.mark], { timeoutMs: 3_000 }).catch(() => undefined)
+  await $.fs.write(r.mark, '').catch(() => undefined)
 }
 
 function osName($: EngineInterface): Promise<'linux' | 'darwin' | 'win32'> {
@@ -314,7 +316,7 @@ async function reset($: EngineInterface, root: string, focus = false): Promise<v
   searchIndex = null
   sizeEpoch += 1
   sizeQueue = []
-  await put($, () => ({ ...emptyTree(root), showHidden: prev.showHidden, showSize: prev.root ? prev.showSize : sizeDefault }))
+  await put($, () => ({ ...emptyTree(root), showHidden: prev.showHidden, showSize: prev.root ? prev.showSize : sizeDefault, edited: prev.edited, onlyEdited: prev.onlyEdited }))
   const title = `Files: ${root.split('/').pop() || root}`
   if (focus) await $.ui.open({ id: PANE, title, focus: true })
   else if (!noDock) await $.ui.open({ id: PANE, title })
@@ -807,6 +809,7 @@ async function touched($: EngineInterface, paths: string[], tone: string, show: 
     await loadDirs($, [...new Set(within.map(dirname))].filter(d => inside(t.root, d)))
     await refreshGit($)
   } else await revealPaths($, within)
+  if (tone === 'orange') await patch($, cur => ({ edited: [...new Set([...cur.edited, ...within])].slice(-EDITED_LIMIT) }))
   if (!show) return
   const tones: Record<string, string> = {}
   for (const p of within) tones[p] = tone
@@ -1064,7 +1067,8 @@ async function navigate($: EngineInterface, key: string, shift = false, surface?
     const target = rows[Math.max(0, Math.min(rows.length - 1, (at < 0 ? 0 : at) + d))]
     return target ? patch($, () => ({ cursor: target.node.id, scroll: null })) : Promise.resolve()
   }
-  if (key === 'up' || key === 'k') await move(-1)
+  if (key === 'e') await patch($, cur => ({ onlyEdited: !cur.onlyEdited, scroll: 0 }))
+  else if (key === 'up' || key === 'k') await move(-1)
   else if (key === 'down' || key === 'j') await move(1)
   else if (key === 'pageup') await move(-10)
   else if (key === 'pagedown') await move(10)
@@ -1187,7 +1191,8 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
-    if (!reviewEdits || (await osName($)) === 'win32') return next(e)
+    if (!reviewEdits) return next(e)
+    const os = await osName($)
     if (review) return { deny: 'Another edit is waiting for review in filewatch; try this one again after it.' }
     let content: string
     try {
@@ -1197,8 +1202,10 @@ export const register: Register = (on, options) => {
     }
     const diff = buildEditDiff(content, e.old_string, e.new_string, e.replace_all === true)
     if (!diff) return next(e)
-    const mark = `${((await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '')}/filewatch-review-${await $.session.id()}-${++markId}.mark`
-    await $.process.run(['rm', '-f', mark], { timeoutMs: 3_000 }).catch(() => undefined)
+    const tmp = os === 'win32' ? (await $.env.get('TEMP')) || (await $.env.get('TMP')) || 'C:/Windows/Temp' : (await $.env.get('TMPDIR')) || '/tmp'
+    const mark = reviewMark(os, tmp, String(await $.session.id()), ++markId)
+    const clear = reviewRemove(os, mark)
+    await $.process.run(clear.argv, clear.init).catch(() => undefined)
     const mine: Review = { file: e.file_path, lines: diff.lines, added: diff.added, removed: diff.removed, choice: '', mark }
     review = mine
     const t = await get($)
@@ -1206,11 +1213,12 @@ export const register: Register = (on, options) => {
     if (!noDock && t.root) await $.ui.open({ id: PANE, title: `Files: ${t.root.split('/').pop() || t.root}` }).catch(() => undefined)
     $.ui.invalidate('ui.render')
     try {
-      await $.process.run(['sh', '-c', 'while [ ! -e "$1" ]; do sleep 0.2; done', 'sh', mark], { timeoutMs: REVIEW_WAIT_MS }).catch(() => undefined)
+      const wait = reviewWait(os, mark, REVIEW_WAIT_MS)
+      await $.process.run(wait.argv, wait.init).catch(() => undefined)
     } finally {
       if (review === mine) review = null
       $.ui.invalidate('ui.render')
-      void $.process.run(['rm', '-f', mark], { timeoutMs: 3_000 }).catch(() => undefined)
+      void $.process.run(clear.argv, clear.init).catch(() => undefined)
     }
     if (mine.choice === 'accept') return next(e)
     return { deny: mine.choice === 'cancel' ? 'The user refused this edit in filewatch; nothing was changed.' : 'The edit review in filewatch timed out; nothing was changed.' }
@@ -1688,6 +1696,7 @@ export const register: Register = (on, options) => {
           ))}
           <Button key="nav-o" plain dimColor autoFocus hotkey="o" label={unicode ? 'open' : '\u{f03cb} open'} onPress={() => void navigate($, 'return')} />
           <Button key="nav-s" plain dimColor hotkey="s" label={unicode ? 'search' : '\u{f0349} search'} onPress={() => void $.ui.focus({ requestId: PANE, key: 'q' })} />
+          <Button key="nav-e" plain dimColor={!t.onlyEdited} hotkey="e" label={unicode ? 'edited' : '\u{f03eb} edited'} onPress={() => void navigate($, 'e')} />
         </Box>
         <Client
           key="rows"
