@@ -46,7 +46,7 @@ jobs:
             fs.mkdirSync(path.join(dir, "sub/deep"), { recursive: true })
             fs.writeFileSync(path.join(dir, "sub/old.txt"), "a")
             if (process.platform === "darwin") {
-              const mark = path.join(os.tmpdir(), "filetree-ci.mark")
+              const mark = path.join(os.tmpdir(), "filewatch-ci.mark")
               cp.execFileSync("touch", [mark])
               cp.execFileSync("sleep", ["1.2"])
               fs.writeFileSync(path.join(dir, "sub/deep/new.txt"), "b")

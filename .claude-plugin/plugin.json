@@ -1,12 +1,12 @@
 {
-  "name": "filetree",
+  "name": "filewatch",
   "version": "0.2.26",
   "description": "An IDE-style file tree for Claude Code that shows what Claude is doing and where in files",
   "types": "./types/index.d.ts",
   "author": {
-    "name": "Kurt Buhler"
+    "name": "Miguel (fork of Kurt Buhler)"
   },
-  "repository": "https://github.com/data-goblin/claude-code-filetree",
+  "repository": "https://github.com/Miguelzvd/filewatch",
   "keywords": [
     "file-tree",
     "git",
@@ -50,7 +50,7 @@
     "start": {
       "type": "string",
       "title": "Open at start",
-      "description": "on: the pane opens when a session starts. off: it stays closed until you run /filetree.",
+      "description": "on: the pane opens when a session starts. off: it stays closed until you run /filewatch.",
       "default": "on",
       "options": [
         "on",

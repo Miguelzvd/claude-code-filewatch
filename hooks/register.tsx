@@ -35,10 +35,10 @@ import {
   visibleRows,
 } from './tree'
 
-const TREE = { plugin: 'filetree', key: 'tree' } as const
-const THEME = { plugin: 'filetree', key: 'theme' } as const
-const ACTIVITY = { plugin: 'filetree', key: 'activity' } as const
-const PANE = 'filetree'
+const TREE = { plugin: 'filewatch', key: 'tree' } as const
+const THEME = { plugin: 'filewatch', key: 'theme' } as const
+const ACTIVITY = { plugin: 'filewatch', key: 'activity' } as const
+const PANE = 'filewatch'
 const SHIMMER = Object.fromEntries(Object.entries(TONES).map(([k, v]) => [k, { bright: v.bright, dim: v.dim }]))
 const LIGHT_SHIMMER = Object.fromEntries(Object.entries(LIGHT_TONES).map(([k, v]) => [k, { bright: v.bright, dim: v.dim }]))
 const BRANCH_ROW = '#branch'
@@ -381,7 +381,7 @@ async function sinceNow($: EngineInterface, writes: boolean): Promise<Since> {
   const ms = await $.clock.now()
   const os = await osName($)
   if (os !== 'darwin' || !writes) return { ms, mark: '', os }
-  const mark = `${((await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '')}/filetree-${await $.session.id()}-${++markId}.mark`
+  const mark = `${((await $.env.get('TMPDIR')) || '/tmp').replace(/\/+$/, '')}/filewatch-${await $.session.id()}-${++markId}.mark`
   try {
     await $.process.run(['touch', mark], { timeoutMs: 3_000 })
     return { ms, mark, os }
@@ -1118,7 +1118,7 @@ export const register: Register = (on, options) => {
   editWithSetting = typeof options?.edit === 'string' ? options.edit.trim() : ''
   noDock = options?.start === 'off'
   on('session.start', async ($, e, next) => {
-    await $.command.register({ name: 'filetree', description: 'Show the file tree; args: [path] (no path = cwd)' })
+    await $.command.register({ name: 'filewatch', description: 'Show the file tree; args: [path] (no path = cwd)' })
     const windows = (await $.env.get('OS')) === 'Windows_NT'
     useDrives(windows)
     inTmux = !windows && Boolean(await $.env.get('TMUX'))
@@ -1155,12 +1155,12 @@ export const register: Register = (on, options) => {
     return result
   })
 
-  on('command.run', { command: 'filetree' }, async ($, e) => {
+  on('command.run', { command: 'filewatch' }, async ($, e) => {
     // The layout checks are the terminal's: the desktop app docks the pane itself and
     // reports no fullscreen layout, so a session no terminal draws skips them.
     const terminal = await $.session.surfaces().then(s => s.includes('terminal'), () => true)
-    if (terminal && !e.presentation.isFullscreen) return { text: 'filetree shows in the sidebar, which needs the fullscreen layout. Run /tui fullscreen, then /filetree.' }
-    if (terminal && e.presentation.columns < 110) return { text: 'filetree shows in the sidebar, which needs a terminal at least 110 columns wide. Widen it, then run /filetree.' }
+    if (terminal && !e.presentation.isFullscreen) return { text: 'filewatch shows in the sidebar, which needs the fullscreen layout. Run /tui fullscreen, then /filewatch.' }
+    if (terminal && e.presentation.columns < 110) return { text: 'filewatch shows in the sidebar, which needs a terminal at least 110 columns wide. Widen it, then run /filewatch.' }
     noDock = false
     const arg = (e.args ?? '').trim()
     const cwd = await cwdOf($)
