@@ -1516,6 +1516,43 @@ test('review off: an Edit runs at once and the pane draws no review', { timeoutM
   await ui.unmount()
 })
 
+test('review in auto mode: an Edit runs at once, and back in default mode it waits again', { timeoutMs: 20_000, options: { review: 'on' } }, async ($, on) => {
+  const ran: Ran = []
+  const root = '/home/k/proj'
+  const calls: string[] = []
+  const clock = world(on, {
+    os: 'linux', env: { HOME: '/home/k', TMPDIR: '/tmp' }, cwd: root, top: '', status: '', numstat: '',
+    dirs: { [root]: [['a.ts', 'file']] },
+    files: { [`${root}/a.ts`]: 'one\ntwo\n' },
+    tool: (e: any) => {
+      calls.push(e.tool)
+      return undefined
+    },
+  }, ran)
+  on('classic.UserPromptSubmit', () => ({}))
+  await $.session.start({ cwd: root, surface: 'terminal', isInteractive: true })
+  await clock.settle()
+  const ui = await $.ui.mount({ plugin: 'filewatch', surface: 'terminal', component: 'Pane', requestId: 'filewatch', props: paneProps(60) })
+  const edit = () => $.tool.call({ tool: 'Edit', file_path: `${root}/a.ts`, old_string: 'two', new_string: 'TWO' } as any).then(v => v, err => err)
+
+  await $.classic.UserPromptSubmit({ prompt: 'go', permission_mode: 'auto', cwd: root } as any)
+  await edit()
+  await clock.settle()
+  expect(calls).toContain('Edit')
+  expect(await texts(ui)).not.toContain('review')
+
+  calls.length = 0
+  await $.classic.UserPromptSubmit({ prompt: 'go', permission_mode: 'default', cwd: root } as any)
+  const held = edit()
+  await clock.settle()
+  expect(await texts(ui)).toContain('review')
+  expect(calls).not.toContain('Edit')
+  await ui.press({ key: 'review-cancel' })
+  await clock.settle()
+  await held
+  await ui.unmount()
+})
+
 test('review on Windows: an Edit waits in the pane, accept lets it run and cancel refuses it', { timeoutMs: 20_000, options: { review: 'on' } }, async ($, on) => {
   const ran: Ran = []
   const root = 'C:/Users/k/proj'

@@ -132,6 +132,9 @@ const REVIEW_WAIT_MS = 600_000
 // An Edit held for the person: the pane draws it, the hook waits on a marker file the buttons touch.
 let review: Review | null = null
 let reviewEdits = false
+// The session's permission mode, as the last classic hook input carried it. Only `default` asks the person
+// about edits; in auto, acceptEdits or bypassPermissions holding an Edit would block a session nobody watches.
+let permissionMode = 'default'
 
 async function decideReview($: EngineInterface, choice: 'accept' | 'cancel'): Promise<void> {
   const r = review
@@ -1210,7 +1213,7 @@ export const register: Register = (on, options) => {
   })
 
   on('tool.call', { tool: 'Edit' }, async ($, e, next) => {
-    if (!reviewEdits) return next(e)
+    if (!reviewEdits || permissionMode !== 'default') return next(e)
     const os = await osName($)
     if (review) return { deny: 'Another edit is waiting for review in filewatch; try this one again after it.' }
     let content: string
@@ -1369,6 +1372,17 @@ export const register: Register = (on, options) => {
     }
     const gd = await gitDir($, posix(e.cwd))
     return gd ? { ...result, watchPaths: [...(result.watchPaths ?? []), join(gd, 'index'), join(gd, 'HEAD')] } : result
+  })
+
+  // A mod's tool.call has no permission mode; these classic inputs do, and Shift+Tab mid-turn shows up at the next tool.
+  on('classic.UserPromptSubmit', async ($, e, next) => {
+    if (e.permission_mode) permissionMode = e.permission_mode
+    return next(e)
+  })
+
+  on('classic.PostToolUse', async ($, e, next) => {
+    if (e.permission_mode) permissionMode = e.permission_mode
+    return next(e)
   })
 
   on('classic.CwdChanged', async ($, e, next) => {
